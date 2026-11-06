@@ -101,3 +101,50 @@ class BinaryTextFeatures:
             return {}
         return dict(zip(self.columns_, self.vectorizer_.get_feature_names_out()))
 
+
+
+def condition_features(homes: pd.DataFrame) -> pd.DataFrame:
+    """Ten handcrafted property-condition indicators from listing remarks."""
+    remarks = _remarks(homes).str.lower()
+
+    patterns = {
+        "renovated": (
+            r"renovated|fully redone|completely redone|"
+            r"redone from top to bottom"
+        ),
+        "updated": (
+            r"updated kitchen|updated bathroom|"
+            r"new countertops|newer flooring|newer windows"
+        ),
+        "luxury": (
+            r"luxury|high-end|designer|"
+            r"heated floors|heated bathroom floors"
+        ),
+        "needs_work": (
+            r"needs work|needs updating|requires updating|"
+            r"requires renovation|fixer.upper|handyman|"
+            r"full cosmetic overhaul"
+        ),
+        "original_dated": (
+            r"original finishes|\bdated\b|tired finishes|"
+            r"older appliances|older windows"
+        ),
+        "as_is": r"as.is|where.is",
+        "well_maintained": (
+            r"well.maintained|well.cared.for|"
+            r"clean and cared for|good condition"
+        ),
+        "move_in_ready": r"move.in.ready|turnkey",
+        "finished_basement": r"\bfinished basement\b",
+        "unfinished_basement": r"\bunfinished basement\b",
+    }
+
+    return pd.DataFrame(
+        {
+            f"remarks_{name}": remarks.str.contains(
+                pattern, regex=True
+            ).astype(int)
+            for name, pattern in patterns.items()
+        },
+        index=homes.index,
+    )

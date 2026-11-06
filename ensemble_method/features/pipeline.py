@@ -4,7 +4,12 @@ from __future__ import annotations
 import pandas as pd
 
 from .base import BoostingFeatures
-from .text import BinaryTextFeatures, build_text_bank, select_terms
+from .text import (
+    BinaryTextFeatures,
+    build_text_bank,
+    select_terms,
+    condition_features,
+)
 from .comparables import ComparableSalesFeatures, add_list_comparable_features
 from .spatial import SpaceTimeSplines, GeographicContextFeatures
 
@@ -12,14 +17,16 @@ from .spatial import SpaceTimeSplines, GeographicContextFeatures
 class FeaturePipeline:
     def __init__(
         self,
-        model="xgboost",
-        track="off_market",
-        text_mode="selected",
-        splines=True,
-        geo_context=True,
-        comparable="base",
-        max_extra_terms=1000,
-        min_df=10,
+        *,
+        model: str = "xgboost",
+        track: str = "off_market",
+        text_mode: str = "selected",
+        conditions: bool = False,  # NEW
+        splines: bool = True,
+        geo_context: bool = True,
+        comparable: str = "base",
+        max_extra_terms: int = 1000,
+        min_df: int = 10,
     ):
         if model not in ("xgboost", "lightgbm", "catboost"):
             raise ValueError(f"Unknown model: {model}")

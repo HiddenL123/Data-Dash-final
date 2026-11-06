@@ -5,7 +5,7 @@ import traceback
 import numpy as np
 import data
 
-from models.models import make_model, OffMarketModel, ListAwareModel
+from ensemble_method.models.models import make_model, OffMarketModel, ListAwareModel
 
 
 # ------------------------------------------------------------

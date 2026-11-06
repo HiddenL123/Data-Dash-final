@@ -7,7 +7,7 @@ from time import perf_counter
 import numpy as np
 import pandas as pd
 
-from features.pipeline import FeaturePipeline
+from ensemble_method.features.pipeline import FeaturePipeline
 
 
 @dataclass

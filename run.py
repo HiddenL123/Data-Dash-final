@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 
 import data
-import models.models as models
+import lightgbm_method.models as lightgbm_model
+import ensemble_method.models as ensemble_models
+models = lightgbm_model
 from check_submission import check_all
 
 
