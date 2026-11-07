@@ -2,15 +2,18 @@
 import numpy as np
 import pandas as pd
 from time import perf_counter
+from ensemble_method.features.cache import feature_cache
 
 
 class WeightedEnsemble:
-    def __init__(self, models, weights, *, training_cutoff=None, training_start=None):
+    def __init__(self, models, weights, *, training_cutoff=None, training_start=None,
+                 workers=None):
         from .models import OffMarketModel, ListAwareModel
         self.models = dict(models)
         self.weights = dict(weights)
         self.training_cutoff = training_cutoff
         self.training_start = training_start
+        self.workers = workers
         if not self.models or set(self.models) != set(self.weights):
             raise ValueError("Each model must have exactly one weight")
         if len({id(model) for model in self.models.values()}) != len(self.models):
@@ -33,11 +36,20 @@ class WeightedEnsemble:
         from .models import _training_rows
         self._fitted = False
         train = _training_rows(train, self.training_cutoff, self.training_start)
-        for index, (name, model) in enumerate(self.models.items(), start=1):
-            started = perf_counter()
-            print(f"[{self.track}] Training member {index}/{len(self.models)}: {name}", flush=True)
-            model.fit(train)
-            print(f"[{self.track}] Member {name} ready in {perf_counter() - started:.1f}s", flush=True)
+        from .workers import worker_budget, fit_members
+        workers, threads = worker_budget(getattr(self, "workers", None), len(self.models))
+        print(f"[{self.track}] Ensemble workers: {workers}" +
+              (f", estimator threads per worker: {threads}" if workers > 1 else ""), flush=True)
+        if workers > 1:
+            self.models = fit_members(self.models, train, workers, threads)
+            self._fitted = True
+            return self
+        with feature_cache():
+            for index, (name, model) in enumerate(self.models.items(), start=1):
+                started = perf_counter()
+                print(f"[{self.track}] Training member {index}/{len(self.models)}: {name}", flush=True)
+                model.fit(train)
+                print(f"[{self.track}] Member {name} ready in {perf_counter() - started:.1f}s", flush=True)
         self._fitted = True
         return self
 

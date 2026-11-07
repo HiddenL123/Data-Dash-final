@@ -12,7 +12,7 @@ import pandas as pd
 
 from catboost import CatBoostRegressor
 
-import features
+from catboost_method import features
 
 
 class CatBoostOffMarket:
@@ -26,15 +26,13 @@ class CatBoostOffMarket:
             loss_function="RMSE",
             l2_leaf_reg=5,
             random_seed=42,
-            verbose=False,
+            verbose=100,
             allow_writing_files=False,
             thread_count=-1,
 
         )
 
     def fit(self, train):
-        train = train.copy()
-
         # Build historical statistics from the training sales.
         self.historical.fit(train)
 
@@ -60,8 +58,9 @@ class CatBoostOffMarket:
             & (train["sold_price"] > 0)
         )
 
-        X = X.loc[valid].copy()
-        y = y.loc[valid]
+        if not valid.all():
+            X = X.loc[valid].copy()
+            y = y.loc[valid]
 
         self.cat_features = X.select_dtypes(
             include=["object", "category", "string"]
@@ -200,7 +199,7 @@ class CatBoostListAware:
             eval_metric="MAE",
             l2_leaf_reg=7,
             random_seed=42,
-            verbose=False,
+            verbose=100,
             allow_writing_files=False,
             thread_count=-1,
         )
@@ -221,7 +220,7 @@ class CatBoostListAware:
             homes["list_price"], errors="coerce"
         )
 
-        area = features.square_feet(homes["house_area"])
+        area = X["area"]
 
         X["list_price"] = list_price
         X["log_list_price"] = np.log(list_price.clip(lower=1))

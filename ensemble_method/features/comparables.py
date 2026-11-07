@@ -120,12 +120,12 @@ class ComparableSalesFeatures:
         if tree is None:
             result[5:7] = 0
             return result
-        k = min(self.candidates, len(hist))
+        k = min(self.candidates, len(hist["sold_day"]))
         d, ix = (tree.query(query_coord[None, :], k=k)
                  if neighbors is None else neighbors)
         d = d[0] * EARTH_KM
-        selected = hist.iloc[ix[0]]
-        age = cutoff_day - selected['sold_day'].to_numpy(dtype=float)
+        selected = ix[0]
+        age = cutoff_day - hist['sold_day'][selected]
         valid = (age >= 0) & (age <= self.max_age_days)
         if not np.any(valid) and not (
             self.min_same_type_neighbors and same_type_tree is not None
@@ -133,39 +133,40 @@ class ComparableSalesFeatures:
             result[5:7] = 0
             return result
         d, age = d[valid], age[valid]
-        selected = selected.iloc[np.flatnonzero(valid)]
+        selected = selected[valid]
 
         if self.min_same_type_neighbors and same_type_tree is not None:
             # Search the same-type pool separately, so minority types are not
             # lost to the geographically nearest 128 mixed-type transactions.
-            # Index labels refer to the same historical rows in both frames.
-            same_k = min(self.candidates, len(same_type_hist))
+            # Positions map the type-specific pool back to the mixed history.
+            same_k = min(self.candidates, len(same_type_hist["sold_day"]))
             same_d, same_ix = (
                 same_type_tree.query(query_coord[None, :], k=same_k)
                 if same_neighbors is None else same_neighbors
             )
-            same_selected = same_type_hist.iloc[same_ix[0]]
+            same_selected = same_type_hist["positions"][same_ix[0]]
             same_d = same_d[0] * EARTH_KM
-            same_age = cutoff_day - same_selected['sold_day'].to_numpy(dtype=float)
+            same_age = cutoff_day - hist['sold_day'][same_selected]
             same_valid = (same_age >= 0) & (same_age <= self.max_age_days)
-            same_selected = same_selected.iloc[np.flatnonzero(same_valid)]
+            same_selected = same_selected[same_valid]
             same_d = same_d[same_valid]
 
             # De-duplicate houses already found through the mixed-type search.
             combined_ids = np.concatenate([
-                selected.index.to_numpy(), same_selected.index.to_numpy()
+                selected, same_selected
             ])
             combined_distances = np.concatenate([d, same_d])
-            is_new = ~pd.Index(combined_ids).duplicated(keep='first')
-            selected = hist.loc[combined_ids[is_new]]
-            d = combined_distances[is_new]
-            age = cutoff_day - selected['sold_day'].to_numpy(dtype=float)
+            # Keep first occurrence in original mixed/type candidate order.
+            first = np.sort(np.unique(combined_ids, return_index=True)[1])
+            selected = combined_ids[first]
+            d = combined_distances[first]
+            age = cutoff_day - hist['sold_day'][selected]
 
         if len(selected) == 0:
             result[5:7] = 0
             return result
-        is_type = (selected['type'].to_numpy() == query_type).astype(float)
-        delta_area = np.abs(selected['log_area'].to_numpy() - query_area)
+        is_type = (hist['type'][selected] == query_type).astype(float)
+        delta_area = np.abs(hist['log_area'][selected] - query_area)
         # Rank by combined similarity instead of geographic proximity alone.
         w = (np.exp(-d/self.radius_km) *
              np.exp(-np.log(2)*age/self.half_life_days) *
@@ -187,15 +188,15 @@ class ComparableSalesFeatures:
             # Bit-for-bit original selection when the quota is disabled.
             keep = np.argsort(-w)[:self.neighbors]
         d, age, w = d[keep], age[keep], w[keep]
-        selected = selected.iloc[keep]
+        selected = selected[keep]
         is_type, delta_area = is_type[keep], delta_area[keep]
         if len(w) < self.min_comps or np.sum(w) < 1e-12:
             result[5] = len(w)
             result[6] = 0
             return result
         w = w / w.sum()
-        lp = selected['log_price'].to_numpy(dtype=float)
-        ppsf = lp - selected['log_area'].to_numpy(dtype=float)
+        lp = hist['log_price'][selected]
+        ppsf = lp - hist['log_area'][selected]
         avg_ppsf = np.sum(w*ppsf)
         result[0] = avg_ppsf + query_area  # size-adjusted local value estimate
         result[1] = avg_ppsf
@@ -253,6 +254,9 @@ class ComparableSalesFeatures:
 
             tree = (BallTree(historical[['lat','lon']].to_numpy(), metric='haversine')
                     if len(historical) else None)
+            arrays = {name: historical[name].to_numpy() for name in
+                      ('sold_day', 'type', 'log_area', 'log_price')}
+            arrays['sold_day'] = arrays['sold_day'].astype(float)
             type_pools = {}
             if self.min_same_type_neighbors and tree is not None:
                 # Build at most one additional pool per queried property type
@@ -261,7 +265,8 @@ class ComparableSalesFeatures:
                     matching = historical.loc[historical['type'] == house_type]
                     if len(matching):
                         type_pools[house_type] = (
-                            matching,
+                            dict(sold_day=matching['sold_day'].to_numpy(),
+                                 positions=np.flatnonzero(arrays['type'] == house_type)),
                             BallTree(matching[['lat', 'lon']].to_numpy(), metric='haversine')
                         )
             if tree is None:
@@ -278,14 +283,14 @@ class ComparableSalesFeatures:
                     local = np.flatnonzero(types[batch] == house_type)
                     if not len(local):
                         continue
-                    d, ix = same_tree.query(coords[local], k=min(self.candidates, len(same_hist)))
+                    d, ix = same_tree.query(coords[local], k=min(self.candidates, len(same_hist["sold_day"])))
                     for j, offset in enumerate(local):
                         same_queries[offset] = (d[j:j + 1], ix[j:j + 1])
                 for offset, pos in enumerate(batch):
                     same_hist, same_tree = type_pools.get(types[pos], (None, None))
                     out[pos] = self._one(
                         coords[offset], np.log(area[pos]), types[pos], cutoff_day,
-                        historical, tree, same_type_hist=same_hist, same_type_tree=same_tree,
+                        arrays, tree, same_type_hist=same_hist, same_type_tree=same_tree,
                         neighbors=(distances[offset:offset + 1], indices[offset:offset + 1]),
                         same_neighbors=same_queries.get(offset),
                     )

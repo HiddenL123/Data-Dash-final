@@ -17,7 +17,9 @@ import pandas as pd
 import data
 import lightgbm_method.models as lightgbm_model
 import ensemble_method.models as ensemble_models
-models = lightgbm_model
+import catboost_method.models as catboost_model
+import blended_model as blended_model
+models = blended_model
 from check_submission import check_all
 
 

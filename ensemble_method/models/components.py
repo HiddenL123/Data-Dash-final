@@ -59,17 +59,38 @@ class Component:
         target = np.asarray(target, dtype=float)
         if target.shape != (len(train),) or not len(train) or not np.isfinite(target).all():
             raise ValueError("Expected one finite target per training row")
+        X = self.prepare_features(train)
+        return self.fit_estimator(X, target)
+
+    def prepare_features(self, train):
+        """Build features in the parent process, where blocks can be reused."""
+        self._fitted = False
         self.pipeline = FeaturePipeline(model=self.family, track=self.track, **self.spec.features)
         started = perf_counter()
-        #print(f"[{self.track}/{self.family}] Building features for {len(train):,} training rows...", flush=True)
+        print(f"[{self.track}/{self.family}] Building features for {len(train):,} training rows...", flush=True)
         X = self.pipeline.fit_transform(train)
-        #print(f"[{self.track}/{self.family}] Features ready: {X.shape[1]:,} columns "
-        #      f"in {perf_counter() - started:.1f}s", flush=True)
+        print(f"[{self.track}/{self.family}] Features ready: {X.shape[1]:,} columns "
+              f"in {perf_counter() - started:.1f}s", flush=True)
         if not X.index.equals(train.index):
             raise ValueError("Feature rows were reordered")
-        rows = _sample_rows(len(train), self.spec)
+        return X
+
+    def fit_estimator(self, X, target, *, threads=None):
+        self._fitted = False
+        target = np.asarray(target, dtype=float)
+        if target.shape != (len(X),) or not len(X) or not np.isfinite(target).all():
+            raise ValueError("Expected one finite target per training row")
+        rows = _sample_rows(len(X), self.spec)
         self.training_rows_ = rows
         params = deepcopy(self.spec.params)
+        if threads is not None:
+            # Override aliases too, so roster settings cannot defeat the budget.
+            aliases = {"catboost": ("thread_count",),
+                       "xgboost": ("n_jobs", "nthread"),
+                       "lightgbm": ("n_jobs", "num_threads", "num_thread", "nthread", "nthreads")}
+            for key in aliases[self.family]:
+                params.pop(key, None)
+            params["thread_count" if self.family == "catboost" else "n_jobs"] = threads
         # The original factories override roster parameter seeds per candidate.
         params["random_seed" if self.family == "catboost" else "random_state"] = self.spec.seed
         if self.family == "xgboost":

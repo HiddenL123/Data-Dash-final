@@ -9,9 +9,11 @@ from .text import (
     build_text_bank,
     select_terms,
     condition_features,
+    training_text_features,
 )
 from .comparables import ComparableSalesFeatures, add_list_comparable_features
 from .spatial import SpaceTimeSplines, GeographicContextFeatures
+from .cache import fit_block, cached_value
 
 
 class FeaturePipeline:
@@ -57,27 +59,28 @@ class FeaturePipeline:
 
         self.columns_ = None
 
-    def _combine(self, homes, fitting=False):
+    def _combine(self, homes, fitting=False, text_frame=None):
         method = "fit_transform" if fitting else "transform"
 
         if fitting:
-            base = self.base.fit_transform(
-                homes, model=self.model, track=self.track
+            self.base, base = fit_block(
+                self.base, homes, model=self.model, track=self.track
             )
         else:
             base = self.base.transform(homes, model=self.model)
 
         frames = [base]
 
-        for provider in (
-            self.comparables,
-            self.splines,
-            self.geo_context,
-        ):
+        for name in ("comparables", "splines", "geo_context"):
+            provider = getattr(self, name)
             if provider is None:
                 continue
 
-            frame = getattr(provider, method)(homes)
+            if fitting:
+                provider, frame = fit_block(provider, homes)
+                setattr(self, name, provider)
+            else:
+                frame = provider.transform(homes)
 
             if not frame.index.equals(homes.index):
                 raise ValueError("Feature row indices do not match")
@@ -89,7 +92,9 @@ class FeaturePipeline:
 
         X = pd.concat(frames, axis=1)
 
-        X = pd.concat([X, getattr(self.text, method)(homes)], axis=1)
+        if text_frame is None:
+            text_frame = getattr(self.text, method)(homes)
+        X = pd.concat([X, text_frame], axis=1)
 
         if X.columns.duplicated().any():
             raise ValueError("Duplicate feature columns")
@@ -97,16 +102,18 @@ class FeaturePipeline:
         return X
 
     def fit_transform(self, train):
-        bank = build_text_bank(
-            train["remarks"],
-            max_features=self.max_extra_terms,
-            min_df=self.min_df,
+        bank = cached_value(
+            train, ("text_bank", self.max_extra_terms, self.min_df),
+            lambda: build_text_bank(train["remarks"],
+                                    max_features=self.max_extra_terms,
+                                    min_df=self.min_df),
         )
 
         terms = select_terms(bank, self.text_mode)
         self.text = BinaryTextFeatures(terms=terms)
 
-        X = self._combine(train, fitting=True)
+        text_frame = training_text_features(self.text, train, bank)
+        X = self._combine(train, fitting=True, text_frame=text_frame)
         self.columns_ = X.columns.tolist()
 
         return X

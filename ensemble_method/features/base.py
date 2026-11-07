@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from pandas.api.types import CategoricalDtype
+from .cache import cached_value
 
 CATEGORICAL_COLUMNS = (
     "house_type_name",
@@ -47,6 +48,13 @@ class BoostingFeatures:
         return homes[name]
 
     def _numeric(self, homes: pd.DataFrame) -> pd.DataFrame:
+        # Formatting adds categorical columns, so never expose the cached frame.
+        return cached_value(
+            homes, ("base_numeric", self.include_time, self.track_),
+            lambda: self._build_numeric(homes),
+        ).copy()
+
+    def _build_numeric(self, homes: pd.DataFrame) -> pd.DataFrame:
         def number(name: str) -> pd.Series:
             return pd.to_numeric(self._column(homes, name), errors="coerce").astype("float32")
 
@@ -76,6 +84,10 @@ class BoostingFeatures:
         return result.replace([np.inf, -np.inf], np.nan)
 
     def _categories(self, homes: pd.DataFrame) -> pd.DataFrame:
+        return cached_value(homes, ("base_categories",),
+                            lambda: self._build_categories(homes)).copy()
+
+    def _build_categories(self, homes: pd.DataFrame) -> pd.DataFrame:
         result = pd.DataFrame(index=homes.index)
         for column in CATEGORICAL_COLUMNS:
             value = self._column(homes, column).fillna("Unknown").astype(str).str.strip()

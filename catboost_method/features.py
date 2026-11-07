@@ -97,7 +97,8 @@ class HistoricalFeatures:
     def fit(self, sales):
         self.groups = {}
 
-        history = sales.copy()
+        history = sales[["date_sold", "house_area", "sold_price",
+                         "community", "house_type_name"]].copy()
         history["date_sold"] = pd.to_datetime(history["date_sold"])
 
         history["area"] = square_feet(history["house_area"])
@@ -251,21 +252,18 @@ class HistoricalFeatures:
                 "recent_trend": np.full(n, np.nan),
             }
 
-        # Process each home.
-        for i in range(n):
-
-            if np.isnat(dates[i]):
-                continue
-
-            cutoff = pd.Timestamp(dates[i])
-
-            for level, keys in levels.items():
-
-                stats = self._stats(
-                    level,
-                    keys[i],
-                    cutoff
-                )
+        # Identical group/date requests share statistics within this transform.
+        # Discard each level's cache before the next; never reuse across fits.
+        valid_positions = np.flatnonzero(~np.isnat(dates))
+        date_keys = dates.astype(np.int64)
+        for level, keys in levels.items():
+            cache = {}
+            for i in valid_positions:
+                request = (keys[i], int(date_keys[i]))
+                stats = cache.get(request)
+                if stats is None:
+                    stats = self._stats(level, keys[i], pd.Timestamp(dates[i]))
+                    cache[request] = stats
 
                 output[level]["median_price"][i] = stats[0]
                 output[level]["median_ppsf"][i] = stats[1]
@@ -363,7 +361,8 @@ class SpatialComparableFeatures:
     def fit(self, sales):
         self.data = {}
 
-        df = sales.copy()
+        df = sales[["house_type_name", "house_area", "date_sold",
+                    "latitude", "longitude", "sold_price"]].copy()
         df["area"] = square_feet(df["house_area"])
         df["date_sold"] = pd.to_datetime(df["date_sold"])
 
@@ -410,86 +409,66 @@ class SpatialComparableFeatures:
             dtype=np.float32
         )
 
-        # Process homes in smaller batches
+        # Query arrays by property type, bounding temporary neighbor matrices.
         batch_size = 500
-        positions = {}
+        types = homes["house_type_name"]
+        lat = homes["latitude"].to_numpy(dtype=float, na_value=np.nan)
+        lon = homes["longitude"].to_numpy(dtype=float, na_value=np.nan)
+        # Match np.datetime64(pd.Timestamp(...)) in the scalar implementation.
+        dates = pd.to_datetime(homes["date_listed"]).to_numpy(dtype="datetime64[us]")
+        groups = types.groupby(types, sort=False).indices
 
-        for kind, data in self.data.items():
-            positions[kind] = data
-
-        for start in range(0, len(homes), batch_size):
-
-            batch = homes.iloc[start:start + batch_size]
-
-            for j, (_, home) in enumerate(batch.iterrows()):
-
-                data = positions.get(home["house_type_name"])
-
-                if data is None:
-                    continue
-
-                if pd.isna(home["latitude"]) or pd.isna(home["longitude"]):
-                    continue
-
-                cutoff = np.datetime64(
-                    pd.Timestamp(home["date_listed"])
+        def median_rows(values, mask):
+            usable = mask & np.isfinite(values)
+            output = np.full(len(values), np.nan)
+            good = usable.any(axis=1)
+            if good.any():
+                output[good] = np.nanmedian(
+                    np.where(usable[good], values[good], np.nan), axis=1
                 )
+            return output
 
-                point = np.array([
-                    float(home["latitude"]),
-                    float(home["longitude"]) * 0.72
-                ])
-
-                # Never request thousands of neighbours
+        completed = 0
+        for kind, positions in groups.items():
+            data = self.data.get(kind)
+            if data is None or not len(data["dates"]):
+                continue
+            positions = positions[~(np.isnan(lat[positions]) | np.isnan(lon[positions]))]
+            for start in range(0, len(positions), batch_size):
+                batch = positions[start:start + batch_size]
+                if np.isnat(dates[batch]).any():
+                    raise TypeError("Spatial comparable queries require valid date_listed")
+                points = np.column_stack([lat[batch], lon[batch] * 0.72])
                 k = min(100, len(data["dates"]))
-
-                distances, indices = data["tree"].query(
-                    point,
-                    k=k,
-                    workers=1
-                )
-
-                indices = np.atleast_1d(indices)
-                distances = np.atleast_1d(distances)
-
-                mask = data["dates"][indices] < cutoff
-
-                selected = indices[mask]
-                selected_distances = distances[mask]
-
-                if len(selected) == 0:
-                    continue
-
-                prices = data["prices"][selected]
-                areas = data["areas"][selected]
-
-                def median(values):
-                    values = values[np.isfinite(values)]
-                    return np.median(values) if len(values) else np.nan
-
-                pps = prices / np.where(
-                    areas > 0,
-                    areas,
-                    np.nan
-                )
-
-                results[start + j] = [
-                    median(prices[:5]),
-                    median(prices[:10]),
-                    median(pps[:10]),
-                    float(selected_distances[0]),
-                    median(areas[:10]),
-                    len(selected),
-                    median(prices[:20]),
-                    median(pps[:20])
-                ]
-
-            print(
-                f"Spatial features: "
-                f"{min(start + batch_size, len(homes)):,}/"
-                f"{len(homes):,}",
-                end="\r"
-            )
+                distances, indices = data["tree"].query(points, k=k, workers=1)
+                distances = distances.reshape(len(batch), k)
+                indices = indices.reshape(len(batch), k)
+                eligible = data["dates"][indices] < dates[batch, None]
+                counts = eligible.sum(axis=1)
+                # Select the first 5/10/20 chronologically eligible neighbors
+                # BEFORE removing nonfinite prices/areas, exactly as before.
+                ranks = np.cumsum(eligible, axis=1)
+                first5 = eligible & (ranks <= 5)
+                first10 = eligible & (ranks <= 10)
+                first20 = eligible & (ranks <= 20)
+                prices = data["prices"][indices]
+                areas = data["areas"][indices]
+                pps = prices / np.where(areas > 0, areas, np.nan)
+                values = np.column_stack([
+                    median_rows(prices, first5),
+                    median_rows(prices, first10),
+                    median_rows(pps, first10),
+                    distances[np.arange(len(batch)), eligible.argmax(axis=1)],
+                    median_rows(areas, first10),
+                    counts,
+                    median_rows(prices, first20),
+                    median_rows(pps, first20),
+                ])
+                values[counts == 0] = np.nan
+                results[batch] = values
+                completed += len(batch)
+                print(f"Spatial features: {completed:,}/{len(homes):,}", end="\r", flush=True)
+        print(f"Spatial features: {len(homes):,}/{len(homes):,}", flush=True)
 
         return pd.DataFrame(
             results,

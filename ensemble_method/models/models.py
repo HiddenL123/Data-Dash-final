@@ -71,6 +71,29 @@ class OffMarketModel:
             prediction += component.predict(homes)
         return prediction
 
+    def _prepare_parallel_fit(self, train):
+        """Prepare independently fitted state without starting estimators."""
+        self._fitted = False
+        train = _training_rows(train, self.training_cutoff)
+        target = self._target(train)
+        self.target_offset_ = float(np.median(target)) if self.center_target else 0.0
+        self.components = [Component(s, track=self.track) for s in self.specs]
+        matrices = [component.prepare_features(train) for component in self.components]
+        # Single-component members do not need another copy of raw listings
+        # in the worker; only residual chains predict their training rows.
+        history = train if len(self.components) > 1 else None
+        return history, target - self.target_offset_, matrices
+
+    def _finish_parallel_fit(self, prepared, threads):
+        train, residual, matrices = prepared
+        # Residual components depend on earlier predictions, so remain sequential.
+        for index, (component, X) in enumerate(zip(self.components, matrices)):
+            component.fit_estimator(X, residual, threads=threads)
+            if index + 1 < len(self.components):
+                residual = residual - component.predict(train)
+        self._fitted = True
+        return self
+
     def predict_log(self, homes):
         return self._predict_target(homes)
 
@@ -106,7 +129,7 @@ class ListAwareModel(OffMarketModel):
 def _accepted_specs(track):
     """Read exact accepted configurations; never substitute generic parameters."""
     filename = "release_checkpoint.zip" if track == "off_market" else "listaware_checkpoint.zip"
-    path = Path(__file__).resolve().parents[1] / "colab_checkpoints" / filename
+    path = Path(__file__).resolve().parents[2] / "colab_checkpoints" / filename
     with ZipFile(path) as archive:
         roster = json.loads(archive.read("roster.json"))
         settings = json.loads(archive.read("manifest.json"))["settings"]

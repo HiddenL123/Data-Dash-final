@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import CountVectorizer
+from .cache import cached_value
 
 # Terms and ordering verified against accepted checkpoint feature manifests.
 _PRESELECTED = (
@@ -82,7 +83,9 @@ class BinaryTextFeatures:
         self.vectorizer_ = CountVectorizer(
             vocabulary=list(self.terms), ngram_range=NGRAM_RANGE,
             binary=True, dtype=np.float32,
-        ).fit(_remarks(homes))
+        ).fit([""])
+        # Vocabulary is fixed: fitting only initializes sklearn's vocabulary
+        # metadata. Scanning training documents here would discard their counts.
         self.columns_ = [f"text_{i}" for i in range(len(self.vectorizer_.get_feature_names_out()))]
         return self
 
@@ -100,6 +103,20 @@ class BinaryTextFeatures:
         if self.vectorizer_ is None:
             return {}
         return dict(zip(self.columns_, self.vectorizer_.get_feature_names_out()))
+
+
+def training_text_features(provider, homes, bank):
+    """Tokenize the full bank once; densify only this member's selected columns."""
+    def build():
+        full = BinaryTextFeatures(terms=bank).fit(homes)
+        return full.vectorizer_.transform(_remarks(homes))
+
+    matrix = cached_value(homes, ("binary_text", bank), build)
+    provider.fit(homes)
+    positions = {term: index for index, term in enumerate(bank)}
+    selected = [positions[term] for term in provider.terms]
+    return pd.DataFrame(matrix[:, selected].toarray(), index=homes.index,
+                        columns=provider.columns_)
 
 
 
