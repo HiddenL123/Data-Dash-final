@@ -12,8 +12,13 @@ from joblib import Parallel, delayed, parallel_config, cpu_count
 
 from ensemble_method.features.cache import feature_cache
 
+# Temporary sequential benchmark override. Set to None to restore configuration.
+WORKER_OVERRIDE = 1
+
 
 def worker_budget(requested, members):
+    if WORKER_OVERRIDE is not None:
+        requested = WORKER_OVERRIDE
     if requested is None:
         requested = os.environ.get("ENSEMBLE_WORKERS", "1")
     cores = max(1, cpu_count())
