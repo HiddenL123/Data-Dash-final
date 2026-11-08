@@ -1,0 +1,25 @@
+{
+  "factories": [
+    "ensemble_method.models.models:make_model",
+    "lightgbm_method.models:make_model",
+    "catboost_method.models:make_model"
+  ],
+  "selection_months": [
+    "2025-09",
+    "2025-10",
+    "2025-11"
+  ],
+  "selection_metric": "pooled_mdape",
+  "weights": {
+    "off_market": [
+      0.5345776236093347,
+      0.20617024192413755,
+      0.25925213446652773
+    ],
+    "list_aware": [
+      0.39546169404207243,
+      0.010382399034678838,
+      0.5941559069232486
+    ]
+  }
+}

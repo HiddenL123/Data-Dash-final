@@ -1,0 +1,7 @@
+track,factory,mape,mdape,p90_ape
+off_market,ensemble_method.models.models:make_model,9.840693669127806,7.49489478945802,20.9165095352508
+off_market,lightgbm_method.models:make_model,10.183059507178003,7.750972807718432,21.85479329008931
+off_market,catboost_method.models:make_model,11.070858342589291,8.33096400544916,23.48663604916771
+list_aware,ensemble_method.models.models:make_model,4.8174404549781125,3.861046025319242,10.037428212969903
+list_aware,lightgbm_method.models:make_model,5.604838811441583,4.510562292720066,11.856218973657155
+list_aware,catboost_method.models:make_model,4.749539471585932,3.7668512770669413,10.071630151989078
